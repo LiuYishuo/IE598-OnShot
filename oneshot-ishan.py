@@ -15,7 +15,7 @@ import numpy as np
 
 input_size = 1000
 key_size = 1000
-num_rows = 200
+num_rows = 1000
 weight_decay = 0.8
 num_classes = 1000
 
@@ -38,6 +38,7 @@ def linear_layer(input_vector,in_dim,out_dim):
     W = weight_variable([in_dim,out_dim])
     b = bias_variable([out_dim])
     return tf.nn.relu(tf.matmul(input_vector,W)+b)
+
 
 def nsmall(a, n):
     k = n%num_rows
@@ -69,7 +70,7 @@ y = tf.nn.softmax(data_read)
 error = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(y, y_))
 
 
-######
+######################################################################
 # least used policy to be implemented
 initial_read_weights = tf.zeros([num_rows,1])
 previous_read_weights = tf.placeholder(tf.float32,shape=[num_rows,1])
@@ -91,7 +92,10 @@ initial_memory = tf.truncated_normal([num_rows, key_size],stddev=0.01)
 memory = tf.add(tf.mul(memory_erase,memory_module),
                                         tf.matmul(write_weights,key))
 
-sess = tf.InteractiveSession()
+train_step = tf.train.AdamOptimizer(1e-4).minimize(error)
+
+
+sess = tf.Session()
 sess.run(tf.initialize_all_variables())
 stored_usage_weights = sess.run(initial_usage_weights)
 stored_read_weights = sess.run(initial_read_weights)
@@ -99,9 +103,9 @@ stored_memory = sess.run(initial_memory)
 stored_least_used_weights = sess.run(initial_usage_weights)
 memory_erase_vector = np.ones([num_rows,1])
 
-for i in range(2000):
-    stored_read_weights,stored_usage_weights,stored_memory = sess.run(
-                                    [read_weights, usage_weights, memory],
+for i in range(100):
+    stored_read_weights,stored_usage_weights,stored_memory, step = sess.run(
+                                    [read_weights, usage_weights, memory, train_step],
                                     feed_dict=
                                     {memory_module: stored_memory,
                                     memory_erase: memory_erase_vector,
@@ -116,3 +120,5 @@ for i in range(2000):
     stored_least_used_weights[ind2]=1
     memory_erase_vector = np.ones([num_rows,1])
     memory_erase_vector[np.argmin(stored_usage_weights)]=0
+
+sess.close()
