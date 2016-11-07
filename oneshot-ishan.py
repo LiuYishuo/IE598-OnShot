@@ -109,7 +109,7 @@ usage_weights = (weight_decay*previous_usage_weights) + (
 error = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(y, y_))
 
 correct_prediction = tf.equal(tf.argmax(y, 1), tf.argmax(y_, 1))
-train_step = tf.train.AdamOptimizer(1e-4).minimize(error)
+train_step = tf.train.RMSPropOptimizer(1e-4,decay=0.95,momentum=0.9).minimize(error)
 accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
 
 
@@ -155,7 +155,7 @@ for episode in range(num_episodes):
     accuracy_vector = np.zeros((num_classes,1))
     count_vector = np.zeros((num_classes,1))
 
-    rotation = np.random.randint(-10,10,100)
+    rotation = np.random.randint(-15,15,100)
     for i in range(100):
         in_x, original_class = mnist.train.next_batch(1)
 
@@ -193,7 +193,7 @@ for episode in range(num_episodes):
     print avg_acc/(episode+1)
 print avg_acc/num_episodes
 
-#saver.restore(sess,'model-1000.ckpt')
+saver.restore(sess,'model-900.ckpt')
 stored_usage_weights = sess.run(initial_usage_weights)
 stored_read_weights = sess.run(initial_read_weights)
 stored_memory = sess.run(initial_memory)
@@ -205,7 +205,7 @@ output = np.zeros([1,num_classes])
 for i in range(500):
 
     batch_xs, in_y = mnist.test.next_batch(1)
-    in_y = shuffle_vector[in_y[0]]
+#    in_y = shuffle_vector[in_y[0]]
     batch_ys = np.zeros([1,num_classes])
     batch_ys[0,in_y] = 1
 
