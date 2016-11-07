@@ -1,7 +1,8 @@
 #!/usr/bin/python
 import tensorflow as tf
 import numpy as np
-
+import matplotlib.pyplot as plt
+import random
 ########################################
 # Basic Architecture
 # Controller network
@@ -11,16 +12,21 @@ import numpy as np
 # Access Memory
 #       ||||||
 # Sigmoidal Output Layer
+from tensorflow.examples.tutorials.mnist import input_data
+mnist = input_data.read_data_sets("MNIST_data/", one_hot=False)
 
 
-input_size = 1000
-key_size = 1000
-num_rows = 1000
+
+input_size = 28*28
+key_size = 50
+num_rows = 50
 weight_decay = 0.8
-num_classes = 1000
+num_classes = 10
+
+shuffle_vector = range(num_classes)
 
 def weight_variable(shape):
-    W = tf.truncated_normal(shape, stddev=0.1)
+    W = tf.truncated_normal(shape, stddev=0.01)
     return tf.Variable(W)
 
 
@@ -29,15 +35,16 @@ def bias_variable(shape):
     return tf.Variable(b)
 
 
-def memory_weights():
-    W = tf.truncated_normal([key_size,1], stddev=0.1)
-    return tf.Variable(W)
-
-
 def linear_layer(input_vector,in_dim,out_dim):
     W = weight_variable([in_dim,out_dim])
     b = bias_variable([out_dim])
     return tf.nn.relu(tf.matmul(input_vector,W)+b)
+
+
+def only_linear_layer(input_vector,in_dim,out_dim):
+    W = weight_variable([in_dim,out_dim])
+    b = bias_variable([out_dim])
+    return (tf.matmul(input_vector,W)+b)
 
 
 def nsmall(a, n):
@@ -45,69 +52,161 @@ def nsmall(a, n):
     return np.partition(a, k)[k-1]
 
 
-#x = tf.placeholder(tf.float32,shape=[1,input_size])
-#y_ = tf.placeholder(tf.float32,shape=[1,num_classes]);
-
-x = tf.zeros([1,input_size])
-y_ = tf.zeros([1,num_classes])
+x = tf.placeholder(tf.float32,shape=[1,input_size])
+prev_output = tf.placeholder(tf.float32,shape=[1,num_classes])
+y_ = tf.placeholder(tf.float32,shape=[1,num_classes]);
 
 memory_module = tf.placeholder(tf.float32,[num_rows, key_size])
 
 #################################
+output_size = 2*key_size + 1 # one output for gate parameter
+
+combined_input = tf.concat(1,[x,prev_output])
 # Controller - 2 layer feed forward network
-x1 = linear_layer(x,input_size,500)
-key = linear_layer(x1,500,key_size)
+x1 = linear_layer(combined_input,input_size+num_classes,500)
+x2 = linear_layer(x1,500,200)
+x3 = linear_layer(x2,200,output_size)
 
-key_norm = tf.nn.l2_normalize(key,1)
-mat_norm = tf.nn.l2_normalize(memory_module,1)
+read_key = tf.slice(x3,[0,0],[1,key_size])
+write_key = tf.slice(x3,[0,key_size],[1,key_size])
+alpha = tf.slice(x3,[0,2*key_size],[1,1])
 
-similarity = tf.matmul(mat_norm, tf.transpose(key_norm))
-
-read_weights = tf.nn.softmax(similarity)
-data_read = tf.matmul(tf.transpose(read_weights),memory_module)
-
-y = tf.nn.softmax(data_read)
-error = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(y, y_))
+key_norm = tf.nn.l2_normalize(read_key,1)
 
 
 ######################################################################
 # least used policy to be implemented
-initial_read_weights = tf.zeros([num_rows,1])
 previous_read_weights = tf.placeholder(tf.float32,shape=[num_rows,1])
 least_used_weights = tf.placeholder(tf.float32,shape=[num_rows,1])
 
-alpha = 1/(1+np.exp(-2))
-write_weights = previous_read_weights*alpha + least_used_weights*(1-alpha)
 
-initial_usage_weights = tf.zeros([num_rows,1])
+beta = 1/(1+tf.exp(-alpha))
+write_weights = previous_read_weights*beta + least_used_weights*(1-beta)
+
 previous_usage_weights = tf.placeholder(tf.float32,shape=[num_rows,1])
+
+memory_erase = tf.placeholder(tf.float32,shape=[num_rows,1])
+memory = tf.add(tf.mul(memory_erase,memory_module),
+                                        tf.matmul(write_weights,write_key))
+
+
+mat_norm = tf.nn.l2_normalize(memory,1)
+similarity = tf.matmul(mat_norm, tf.transpose(key_norm))
+read_weights = tf.transpose(tf.nn.softmax(tf.transpose(similarity)))
+data_read = tf.matmul(tf.transpose(read_weights),memory)
+
+input_to_softmax = tf.concat(1,[data_read, x2])
+y = only_linear_layer(input_to_softmax,key_size+200,num_classes)
+
 usage_weights = (weight_decay*previous_usage_weights) + (
                                                 read_weights + write_weights)
 
 
-memory_erase = tf.placeholder(tf.float32,shape=[num_rows,1])
-initial_memory = tf.truncated_normal([num_rows, key_size],stddev=0.01)
+error = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(y, y_))
 
-
-memory = tf.add(tf.mul(memory_erase,memory_module),
-                                        tf.matmul(write_weights,key))
-
+correct_prediction = tf.equal(tf.argmax(y, 1), tf.argmax(y_, 1))
 train_step = tf.train.AdamOptimizer(1e-4).minimize(error)
+accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
 
 
 sess = tf.Session()
+saver = tf.train.Saver()
 sess.run(tf.initialize_all_variables())
+
+initial_usage_weights = tf.truncated_normal([num_rows,1],stddev=0.1)
+stored_usage_weights = sess.run(initial_usage_weights)
+
+initial_read_weights = tf.truncated_normal([num_rows,1],stddev=0.1)
+stored_read_weights = sess.run(initial_read_weights)
+
+initial_memory = tf.truncated_normal([num_rows, key_size],stddev=0.1)
+stored_memory = sess.run(initial_memory)
+
+stored_least_used_weights = sess.run(initial_usage_weights)
+memory_erase_vector = np.ones([num_rows,1])
+
+initial_error = tf.constant(1.0,shape=[1])
+current_error = sess.run(initial_error)
+
+batch_xs1, batch_ys1 = mnist.train.next_batch(1)
+output = np.zeros([1,num_classes])
+avg_acc = 0
+
+
+for episode in range(1000):
+    random.shuffle(shuffle_vector)
+    print episode
+    if episode%100 == 0:
+        save_path=saver.save(sess,"model+"+str(episode)+".ckpt")
+
+    stored_usage_weights = sess.run(initial_usage_weights)
+    stored_read_weights = sess.run(initial_read_weights)
+    stored_memory = sess.run(initial_memory)
+    stored_least_used_weights = sess.run(initial_usage_weights)
+    memory_erase_vector = np.ones([num_rows,1])
+
+
+    accuracy_vector = np.zeros((num_classes,1))
+    count_vector = np.zeros((num_classes,1))
+    for i in range(100):
+#        if episode%50 == 49:
+#            raw_input('Press any key:')
+        batch_xs, original_class = mnist.train.next_batch(1)
+
+        count_vector[original_class[0]] = count_vector[original_class[0]]+1
+        in_y = shuffle_vector[original_class[0]]
+        batch_ys = np.zeros([1,num_classes])
+        batch_ys[0,in_y] = 1
+
+        output, stored_read_weights,stored_usage_weights,stored_memory, step, acc = sess.run(
+                                        [y_, read_weights, usage_weights, memory, train_step, accuracy],
+                                        feed_dict=
+                                        {x: batch_xs, y_: batch_ys,
+                                        prev_output: output,
+                                        memory_module: stored_memory,
+                                        memory_erase: memory_erase_vector,
+                                        least_used_weights: stored_least_used_weights,
+                                        previous_usage_weights: stored_usage_weights,
+                                        previous_read_weights: stored_read_weights})
+
+        nthsmallest = nsmall(np.reshape(stored_usage_weights,[num_rows]),i+1)
+        ind1 = stored_usage_weights > nthsmallest
+        ind2 = stored_usage_weights <= nthsmallest
+        stored_least_used_weights[ind1]=0
+        stored_least_used_weights[ind2]=1
+        memory_erase_vector = np.ones([num_rows,1])
+        memory_erase_vector[np.argmin(stored_usage_weights)]=0
+
+        accuracy_vector[original_class[0]] = accuracy_vector[original_class[0]] + acc
+
+        avg_acc = avg_acc + acc
+#    if episode%10 == 0:
+#        print (accuracy_vector/count_vector)
+
+print avg_acc/100000
+
+#saver.restore(sess,'model.ckpt')
 stored_usage_weights = sess.run(initial_usage_weights)
 stored_read_weights = sess.run(initial_read_weights)
 stored_memory = sess.run(initial_memory)
 stored_least_used_weights = sess.run(initial_usage_weights)
 memory_erase_vector = np.ones([num_rows,1])
+total_acc = np.zeros(5000)
 
-for i in range(100):
-    stored_read_weights,stored_usage_weights,stored_memory, step = sess.run(
-                                    [read_weights, usage_weights, memory, train_step],
+output = np.zeros([1,num_classes])
+for i in range(1000):
+
+    batch_xs, in_y = mnist.train.next_batch(1)
+    #in_y = shuffle_vector[in_y[0]]
+    batch_ys = np.zeros([1,num_classes])
+    batch_ys[0,in_y] = 1
+
+    output, stored_read_weights,stored_usage_weights,stored_memory, acc = sess.run(
+                                    [y, read_weights, usage_weights, memory, accuracy],
                                     feed_dict=
-                                    {memory_module: stored_memory,
+                                    {x: batch_xs, y_: batch_ys,
+                                    prev_output: output,
+                                    memory_module: stored_memory,
                                     memory_erase: memory_erase_vector,
                                     least_used_weights: stored_least_used_weights,
                                     previous_usage_weights: stored_usage_weights,
@@ -120,5 +219,8 @@ for i in range(100):
     stored_least_used_weights[ind2]=1
     memory_erase_vector = np.ones([num_rows,1])
     memory_erase_vector[np.argmin(stored_usage_weights)]=0
-
+    total_acc[i] = acc
+    #print acc
 sess.close()
+print np.sum(total_acc)
+#print stored_memory
