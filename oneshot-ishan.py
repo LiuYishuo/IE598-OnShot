@@ -2,6 +2,7 @@
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy import ndimage
 import random
 ########################################
 # Basic Architecture
@@ -16,8 +17,8 @@ from tensorflow.examples.tutorials.mnist import input_data
 mnist = input_data.read_data_sets("MNIST_data/", one_hot=False)
 
 
-
-input_size = 28*28
+image_size = 28
+input_size = image_size*image_size
 key_size = 50
 num_rows = 50
 weight_decay = 0.8
@@ -69,7 +70,7 @@ x3 = linear_layer(x2,200,output_size)
 
 read_key = tf.slice(x3,[0,0],[1,key_size])
 write_key = tf.slice(x3,[0,key_size],[1,key_size])
-alpha = tf.slice(x3,[0,2*key_size],[1,1])
+alpha = tf.slice(x3,[0,2*key_size],[1,1]) # gate parameter
 
 key_norm = tf.nn.l2_normalize(read_key,1)
 
@@ -80,7 +81,7 @@ previous_read_weights = tf.placeholder(tf.float32,shape=[num_rows,1])
 least_used_weights = tf.placeholder(tf.float32,shape=[num_rows,1])
 
 
-beta = 1/(1+tf.exp(-alpha))
+beta = tf.sigmoid(alpha)
 write_weights = previous_read_weights*beta + least_used_weights*(1-beta)
 
 previous_usage_weights = tf.placeholder(tf.float32,shape=[num_rows,1])
@@ -95,8 +96,11 @@ similarity = tf.matmul(mat_norm, tf.transpose(key_norm))
 read_weights = tf.transpose(tf.nn.softmax(tf.transpose(similarity)))
 data_read = tf.matmul(tf.transpose(read_weights),memory)
 
-input_to_softmax = tf.concat(1,[data_read, x2])
-y = only_linear_layer(input_to_softmax,key_size+200,num_classes)
+input_to_softmax = linear_layer(tf.concat(1,[data_read, x2]),key_size+200,100)
+y = only_linear_layer(input_to_softmax,100,num_classes)
+
+#input_to_softmax = (tf.concat(1,[data_read, x2]))
+#y = only_linear_layer(input_to_softmax,key_size+200,num_classes)
 
 usage_weights = (weight_decay*previous_usage_weights) + (
                                                 read_weights + write_weights)
@@ -133,11 +137,12 @@ output = np.zeros([1,num_classes])
 avg_acc = 0
 
 
-for episode in range(1000):
+num_episodes = 50000
+for episode in range(num_episodes):
     random.shuffle(shuffle_vector)
     print episode
-    if episode%100 == 0:
-        save_path=saver.save(sess,"model+"+str(episode)+".ckpt")
+    if episode%500 == 0:
+        save_path=saver.save(sess,"model-"+str(episode)+".ckpt")
 
     stored_usage_weights = sess.run(initial_usage_weights)
     stored_read_weights = sess.run(initial_read_weights)
@@ -146,12 +151,15 @@ for episode in range(1000):
     memory_erase_vector = np.ones([num_rows,1])
 
 
+
     accuracy_vector = np.zeros((num_classes,1))
     count_vector = np.zeros((num_classes,1))
+
+    rotation = np.random.randint(-10,10,100)
     for i in range(100):
-#        if episode%50 == 49:
-#            raw_input('Press any key:')
-        batch_xs, original_class = mnist.train.next_batch(1)
+        in_x, original_class = mnist.train.next_batch(1)
+
+        batch_xs = np.reshape(ndimage.rotate(np.reshape(in_x,[image_size,image_size]), rotation[i], reshape=False),[1,input_size])
 
         count_vector[original_class[0]] = count_vector[original_class[0]]+1
         in_y = shuffle_vector[original_class[0]]
@@ -182,22 +190,22 @@ for episode in range(1000):
         avg_acc = avg_acc + acc
 #    if episode%10 == 0:
 #        print (accuracy_vector/count_vector)
+    print avg_acc/(episode+1)
+print avg_acc/num_episodes
 
-print avg_acc/100000
-
-#saver.restore(sess,'model.ckpt')
+#saver.restore(sess,'model-1000.ckpt')
 stored_usage_weights = sess.run(initial_usage_weights)
 stored_read_weights = sess.run(initial_read_weights)
 stored_memory = sess.run(initial_memory)
 stored_least_used_weights = sess.run(initial_usage_weights)
 memory_erase_vector = np.ones([num_rows,1])
-total_acc = np.zeros(5000)
+total_acc = np.zeros(500)
 
 output = np.zeros([1,num_classes])
-for i in range(1000):
+for i in range(500):
 
-    batch_xs, in_y = mnist.train.next_batch(1)
-    #in_y = shuffle_vector[in_y[0]]
+    batch_xs, in_y = mnist.test.next_batch(1)
+    in_y = shuffle_vector[in_y[0]]
     batch_ys = np.zeros([1,num_classes])
     batch_ys[0,in_y] = 1
 
@@ -220,7 +228,6 @@ for i in range(1000):
     memory_erase_vector = np.ones([num_rows,1])
     memory_erase_vector[np.argmin(stored_usage_weights)]=0
     total_acc[i] = acc
-    #print acc
+
 sess.close()
 print np.sum(total_acc)
-#print stored_memory
