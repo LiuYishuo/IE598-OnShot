@@ -6,6 +6,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy import ndimage
 import random
+
+from mann.utils.generators import OmniglotGenerator
 ########################################
 # Basic Architecture
 # Controller network
@@ -15,31 +17,30 @@ import random
 # Access Memory
 #       ||||||
 # Sigmoidal Output Layer
-from tensorflow.examples.tutorials.mnist import input_data
-mnist = input_data.read_data_sets("./MNIST_data/", one_hot=True)
+#from tensorflow.examples.tutorials.mnist import input_data
+#mnist = input_data.read_data_sets("./MNIST_data/", one_hot=True)
 
-image_size = 28
+image_size = 20
 input_size = image_size*image_size
 key_size = 40
 num_rows = 100
 weight_decay = 0.95
-num_classes = 10
+num_classes = 5
 num_read_heads = 4
 
 batch_size = 16
+seq_size = 49
 
 shuffle_vector = range(num_classes)
 
 def weight_variable(shape):
-    with tf.variable_scope("RNN"):
-        W = tf.truncated_normal(shape, stddev=0.01)
-        return tf.Variable(W)
+    W = tf.truncated_normal(shape, stddev=0.01)
+    return tf.Variable(W)
 
 
 def bias_variable(shape):
-    with tf.variable_scope("RNN"):
-        b = tf.constant(0.1,shape=shape)
-        return tf.Variable(b)
+    b = tf.constant(0.1,shape=shape)
+    return tf.Variable(b)
 
 
 def linear_layer(input_vector,in_dim,out_dim, l_name = ""):
@@ -70,6 +71,7 @@ def non_trainable_variable(shape, name = None, init = ['normal', 0.0, 0.1]):
                 initializer = tf.constant_initializer(init[1]))
     return ntv
 
+
 def set_k_top_to_zero(x,k):
     values, indices = tf.nn.top_k(x,k)
     my_range = tf.expand_dims(tf.range(0, indices.get_shape()[0]), 1)
@@ -80,7 +82,14 @@ def set_k_top_to_zero(x,k):
     res = (x - to_substract)
     return tf.sign(res)
 
-seq_size = 200
+
+def convertToOneHot(vector, num_classes=5):
+    b = np.reshape(vector,[batch_size*(seq_size+1)])
+    result = np.zeros(shape=(len(b), num_classes))
+    result[np.arange(len(vector)), vector] = 1
+    return np.reshape(result.astype(int),[batch_size,seq_size+1,num_classes])
+
+
 
 x = tf.placeholder(tf.float32,shape=[None, seq_size, input_size + num_classes])
 modified_x = tf.transpose(x,[1,0,2])
@@ -116,7 +125,7 @@ with tf.variable_scope("RNN"):
     for time_step in range(num_steps):
         if time_step > 0: tf.get_variable_scope().reuse_variables()
         (output, state) = cell(tf.reshape(modified_x[time_step,:,:],shape=[batch_size,input_size+num_classes]), state)
-	
+
         write_key_temp = linear_layer(output,num_hidden,num_read_heads*key_size, l_name = "write")
         write_key = tf.reshape(write_key_temp,shape=[-1,num_read_heads,key_size])
 
@@ -148,16 +157,13 @@ with tf.variable_scope("RNN"):
         y = (only_linear_layer(flattened_data_read,num_read_heads*key_size,num_classes, l_name = "read2out")
             + only_linear_layer(state_h,num_hidden,num_classes, l_name = "hidden2out"))
 
-        if (time_step < 100):
-            error += tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(y, tf.reshape(y_[:,time_step,:],shape=[-1,num_classes])))
+        error += tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(y, tf.reshape(y_[:,time_step,:],shape=[-1,num_classes])))
 
         correct_prediction = tf.equal(tf.argmax(y, 1), tf.argmax(tf.reshape(y_[:,time_step,:],shape=[-1,num_classes]), 1))
         accuracy += tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
-        if (time_step > 99):
-            accuracy_next_100 += tf.reduce_mean(tf.cast(correct_prediction, tf.float32))    #Zero out least used memory
 
 #train_step = tf.train.RMSPropOptimizer(1e-4,decay=0.95,momentum=0.9).minimize(error)
-train_step = tf.train.AdamOptimizer(1e-3).minimize(error)
+train_step = tf.train.AdamOptimizer(5e-4).minimize(error)
 
 sess = tf.Session()
 saver = tf.train.Saver(max_to_keep=200)
@@ -167,21 +173,22 @@ shuffle_vector=range(num_classes)
 sess.run(tf.initialize_all_variables())
 avg_err = 0
 
+generator = OmniglotGenerator(data_folder='./data/omniglot/images_background/', batch_size=16, \
+nb_samples=5, nb_samples_per_class=10, max_rotation=0., max_shift=0, max_iter=None)
+
 
 num_episodes = 100000
 for episode in range(num_episodes):
-    if episode%500 == 0:
-        save_path=saver.save(sess,"./model_"+str(episode)+".ckpt")
-    random.shuffle(shuffle_vector)
-    batch_xs, original_class = mnist.train.next_batch(batch_size*(seq_size+1))
-    batch_ys = original_class[:,np.argsort(shuffle_vector)]
-    batch_xs = np.reshape(batch_xs,[batch_size,seq_size+1,input_size])
-    batch_ys = np.reshape(batch_ys,[batch_size,seq_size+1,num_classes])
-    in_x = np.concatenate((batch_xs[:,1:],batch_ys[:,:seq_size]),axis=2)
-    acc_next, acc, err, step = sess.run([accuracy_next_100, accuracy, error, train_step], feed_dict={x:in_x, y_:batch_ys[:,1:]})
+#    if episode%500 == 0:
+#        save_path=saver.save(sess,"./model_"+str(episode)+".ckpt")
+    i, (batch_xs,example_output) = generator.next()
+    batch_ys = convertToOneHot(np.reshape(example_output,[batch_size*(seq_size+1)]))
+    in_x = np.concatenate((batch_xs[:,1:seq_size+1],batch_ys[:,:seq_size]),axis=2)
+
+    acc, err, step = sess.run([accuracy, error, train_step], feed_dict={x:in_x, y_:batch_ys[:,1:]})
     avg_err += err
-    if episode%100 == 0:
-        print "Episode: " + str(episode) + "Total accuracy " + str(acc) + " next accuracy " + str(acc_next) + " error " + str(err) + " avg error " + str(avg_err/(episode+1))
+    if episode%10 == 0:
+        print "Episode: " + str(episode) + " accuracy " + str(acc) + " error " + str(err) + " avg error " + str(avg_err/(episode+1))
 
 
 #saver.restore(sess,'./model.ckpt')
@@ -190,16 +197,9 @@ A=0
 num_episodes = 100
 
 for episode in range(num_episodes):
-    random.shuffle(shuffle_vector)
-    batch_xs, original_class = mnist.test.next_batch((seq_size+1))
-    batch_xs = np.reshape(np.repeat(batch_xs,batch_size),[-1,batch_size])
-    batch_xs = np.reshape(np.transpose(batch_xs),[-1,input_size])
-    batch_ys = original_class[:,np.argsort(shuffle_vector)]
-    batch_ys = np.reshape(np.repeat(batch_ys,batch_size),[-1,batch_size])
-    batch_ys = np.reshape(np.transpose(batch_ys),[-1,num_classes])
-    batch_xs = np.reshape(batch_xs,[batch_size,seq_size+1,input_size])
-    batch_ys = np.reshape(batch_ys,[batch_size,seq_size+1,num_classes])
-    in_x = np.concatenate((batch_xs[:,1:],batch_ys[:,:seq_size]),axis=2)
+    i, (batch_xs,example_output) = generator.next()
+    batch_ys = convertToOneHot(np.reshape(example_output,[batch_size*(seq_size+1)]))
+    in_x = np.concatenate((batch_xs[:,1:seq_size+1],batch_ys[:,:seq_size]),axis=2)
     acc_next, acc, err = sess.run([accuracy_next_100, accuracy, error], feed_dict={x:in_x, y_:batch_ys[:,1:]})
     print acc_next
 #    print temp
