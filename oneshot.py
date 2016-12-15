@@ -32,6 +32,10 @@ batch_size = 16
 seq_size = 49
 shuffle_vector = range(num_classes)
 
+dirpath = "/u/training/tra263/scratch/ntm-one-shot/"
+batch_fldr = "OmniglotBatches/"
+ckptpath = 'Omniglot_verysmallmem_ckpts/model_99500.ckpt'
+
 # Helper functions for declaring weights and biases for any layer
 def weight_variable(shape):
     W = tf.truncated_normal(shape, stddev=0.01)
@@ -216,13 +220,13 @@ sess.run(tf.initialize_all_variables())
 avg_err = 0
 shuffle_vector=range(num_classes)
 
-batch_list = os.listdir("/u/training/tra263/scratch/ntm-one-shot/OmniglotBatches")
+batch_list = os.listdir(dirpath+batch_fldr)
 num_episodes = 100000
 for episode in range(num_episodes):
      if episode%500 == 0:
          save_path=saver.save(sess,"./newaccuracy_ckpts/model_"+str(episode)+".ckpt")
      filename = np.random.choice(batch_list)
-     with np.load("/u/training/tra263/scratch/ntm-one-shot/OmniglotBatches/"+filename) as data:
+     with np.load(dirpath+batch_fldr+filename) as data:
          batch_xs = data['ip']
          example_output = data['op']
      batch_ys = convertToOneHot(np.reshape(example_output,[batch_size*(seq_size+1)]))
@@ -240,55 +244,59 @@ for episode in range(num_episodes):
 
 #################################################################################
 # Testing
-#saver.restore(sess,'/u/training/tra263/scratch/ntm-one-shot/model_.ckpt')
+def getcount(arr, hits, shots = 10):
+    """Gets a summary of accuracies"""
+    assert arr.shape==(batch_size, (seq_size +1)), \
+    "array input shape does not match expected shape: (%d,%d)"%(batch_size, (seq_size +1))
+    current_count = np.zeros((batch_size, seq_size+1, num_classes))
+    success_count = np.zeros_like(current_count)
+    shot_count = np.zeros((num_classes, shots))
+    shot_success_count = np.zeros((num_classes, shots))
+    for I in ndi.ndindex(arr.shape):
+        current_count[I][arr[I]] = 1
+        success_count[I][arr[I]] = hits[I]
+
+    temp=np.cumsum(current_count, axis = 1)
+    for batch in range(batch_size):
+        for instance in range(seq_size +1):
+            for class_label in range(num_classes):
+                num_shot = int(temp[batch, instance, class_label])
+                if num_shot != 0 and num_shot-1<shots:
+                    shot_count[class_label, num_shot-1] += 1
+                    shot_success_count[class_label, num_shot-1] += hits[batch, instance]
+
+    total_count = np.sum(current_count, axis = 0).T
+    success_count = (np.sum(success_count, axis = 0).T)
+    return total_count, success_count, shot_count, shot_success_count
+
+saver.restore(sess, dirpath + ckptpath)
 A= np.zeros(30)
 count = np.zeros(30)
 num_episodes = 50
+total_count = np.zeros((num_episodes, num_classes, seq_size + 1))
+success_count = np.zeros_like(total_count)
+shot_count = np.zeros((num_episodes, num_classes, (seq_size + 1)/num_classes))
+shot_success_count = np.zeros_like(shot_count)
 for episode in range(num_episodes):
     filename = np.random.choice(batch_list)
-    with np.load("/u/training/tra263/scratch/ntm-one-shot/OmniglotBatches/"+filename) as data:
+    with np.load(dirpath+ batch_fldr + filename) as data:
         batch_xs = data['ip']
         example_output = data['op']
-#    i, (batch_xs,example_output) = generator.next()
     batch_ys = convertToOneHot(np.reshape(example_output,[batch_size*(seq_size+1)]))
     in_x = np.concatenate((batch_xs[:,1:seq_size+1],batch_ys[:,:seq_size]),axis=2)
     in_y = batch_ys[:,1:]
-    vec, acc, err = sess.run([correct_prediction, accuracy_vector, error], feed_dict={x:in_x,
-								     y_:n_y,
+    mem, acc_list, err, step = sess.run([memory, out_prediction, error, train_step], feed_dict={x:in_x,
+								     y_:in_y,
 								     num_instances:counter(in_y)})
-    temp = np.asarray(acc)
-    classes = np.argmax(batch_ys[0,1:],1)
-    for class_num in range(num_classes):
-        ind = np.argwhere(classes==class_num)
-        r = temp[ind]
-        for j in range(min(r.size,30)):
-            A[j] += r[j]
-            count[j] += 1
 
-plt.plot(np.divide(A,count)*100)
-plt.xlabel("Class instance")
-plt.ylabel("accuracy")
-plt.savefig("Accuracy.png", format = 'png')
-plt.show()
+    hits = np.append(np.zeros((batch_size,1)), acc_list.T, axis = 1)
+    total_count[episode], success_count[episode], shot_count[episode], \
+            shot_success_count[episode] = getcount(example_output, hits)
+    print "Episode %d, Mean population: %s" % (episode + 1, repr(total_count[episode].sum(axis = 1)))
+# class-wise overall accuracy and shot-wise accuracy
+acc_classwise = success_count.sum(axis=0)/total_count.sum(axis = 0)
+shot_acc_classwise = shot_success_count.sum(axis=0)/shot_count.sum(axis = 0)
+# averaged across all (5)  classes
+acc = acc_classwise.mean(axis = 0)
+shot_acc = shot_acc_classwise.mean(axis = 0)
 
-w = np.divide(A,count)*100
-
-fig, ax1 = plt.subplots()
-ax1.plot(w, 'b-')
-ax1.set_xlabel('Class instance')
-# Make the y-axis label and tick labels match the line color.
-ax1.set_ylabel('Accuracy', color='b')
-for tl in ax1.get_yticklabels():
-    tl.set_color('b')
-
-ax2 = ax1.twinx()
-ax2.plot(count, 'r.')
-ax2.set_ylabel('count', color='r')
-for tl in ax2.get_yticklabels():
-    tl.set_color('r')
-plt.savefig("Accuracy_and_count.png", format = 'png')
-plt.show()
-
-np.savetxt('class_accuracy.txt', w, delimiter = ',')
-
-sess.close()
