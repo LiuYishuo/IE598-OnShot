@@ -1,0 +1,6 @@
+Code - oneshot.py
+Presentation - presentation.pdf
+Report - report.pdf
+
+
+batch_generators - creats batches as numpy arrays to avoid I/O at runtime

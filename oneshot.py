@@ -299,4 +299,3 @@ shot_acc_classwise = shot_success_count.sum(axis=0)/shot_count.sum(axis = 0)
 # averaged across all (5)  classes
 acc = acc_classwise.mean(axis = 0)
 shot_acc = shot_acc_classwise.mean(axis = 0)
-
